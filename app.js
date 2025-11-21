@@ -126,7 +126,14 @@
   }
 
   function defaultStats() {
-    return { wrongStreak: 0, correctStreak: 0, dueAt: 0, lastShownAt: 0 };
+    return {
+      wrongStreak: 0,
+      correctStreak: 0,
+      dueAt: 0,
+      lastShownAt: 0,
+      seen: false,
+      hasAnswered: false,
+    };
   }
 
   function loadWaypointStats(id) {
@@ -153,8 +160,23 @@
 
   function mergeStoredStats(waypointList) {
     waypointList.forEach((wp) => {
-      const stored = loadWaypointStats(wp.id);
-      wp.stats = { ...defaultStats(), ...(stored || {}) };
+      const stored = loadWaypointStats(wp.id) || {};
+      const merged = { ...defaultStats(), ...stored };
+
+      merged.hasAnswered =
+        typeof merged.hasAnswered === 'boolean'
+          ? merged.hasAnswered
+          : Boolean(
+              stored?.dueAt ||
+                stored?.lastShownAt ||
+                stored?.correctStreak ||
+                stored?.wrongStreak
+            );
+
+      merged.seen =
+        typeof merged.seen === 'boolean' ? merged.seen : Boolean(merged.hasAnswered);
+
+      wp.stats = merged;
     });
   }
 
@@ -258,6 +280,7 @@
     const now = Date.now();
     waypoint.stats.wrongStreak += 1;
     waypoint.stats.correctStreak = 0;
+    waypoint.stats.hasAnswered = true;
     waypoint.stats.dueAt = now + wrongInterval(waypoint.stats.wrongStreak);
     waypoint.stats.lastShownAt = now;
     persistWaypointStats(waypoint);
@@ -268,6 +291,7 @@
     const now = Date.now();
     waypoint.stats.wrongStreak = 0;
     waypoint.stats.correctStreak += 1;
+    waypoint.stats.hasAnswered = true;
 
     const base = baseCorrectInterval(wrongsBeforeCorrect);
     const streakMultiplier =
@@ -289,29 +313,62 @@
     requestRender();
   }
 
+  function randomItem(list) {
+    if (!list?.length) return null;
+    const index = Math.floor(Math.random() * list.length);
+    return list[index];
+  }
+
   function chooseNextTarget(availableWaypoints, { excludeId } = {}) {
     const pool = excludeId
       ? availableWaypoints.filter((wp) => wp.id !== excludeId)
       : availableWaypoints;
 
     if (!pool.length) return null;
-    const now = Date.now();
-    const due = pool.filter((wp) => !wp.stats?.dueAt || wp.stats.dueAt <= now);
 
-    if (due.length) {
-      const sortedDue = [...due].sort(
-        (a, b) => (a.stats?.dueAt ?? now) - (b.stats?.dueAt ?? now)
-      );
-      return sortedDue[0];
+    const now = Date.now();
+    const groupA = [];
+    const groupB = [];
+    const groupC = [];
+
+    pool.forEach((wp) => {
+      if (!wp.stats) wp.stats = defaultStats();
+      const { seen, hasAnswered, dueAt } = wp.stats;
+
+      if (hasAnswered && (dueAt ?? now) <= now) {
+        groupA.push(wp);
+        return;
+      }
+
+      if (!seen) {
+        groupB.push(wp);
+        return;
+      }
+
+      if (hasAnswered) {
+        groupC.push({ wp, dueAt });
+      }
+    });
+
+    if (groupA.length) {
+      return randomItem(groupA);
     }
 
-    const jittered = pool.map((wp) => ({
-      wp,
-      value: (wp.stats?.dueAt ?? now) + Math.random() * 2000,
-    }));
+    if (groupB.length) {
+      return randomItem(groupB);
+    }
 
-    jittered.sort((a, b) => a.value - b.value);
-    return jittered[0].wp;
+    if (groupC.length) {
+      const jittered = groupC.map(({ wp, dueAt }) => ({
+        wp,
+        value: (dueAt ?? now) + Math.random() * 2000,
+      }));
+
+      jittered.sort((a, b) => a.value - b.value);
+      return jittered[0].wp;
+    }
+
+    return randomItem(pool);
   }
 
   function refreshQueuedNextTarget() {
@@ -332,13 +389,18 @@
       return null;
     }
 
-    const queuedIsValid = queuedNextTarget?.id
-      ? available.some((wp) => wp.id === queuedNextTarget.id)
-      : false;
-
-    const next = queuedIsValid ? queuedNextTarget : chooseNextTarget(available);
+    const next = chooseNextTarget(available);
     queuedNextTarget = null;
     return next;
+  }
+
+  function markWaypointSeen(waypoint) {
+    if (!waypoint) return;
+    if (!waypoint.stats) waypoint.stats = defaultStats();
+    if (waypoint.stats.seen) return;
+
+    waypoint.stats.seen = true;
+    persistWaypointStats(waypoint);
   }
 
   function updateCurrentTarget() {
@@ -362,6 +424,8 @@
       currentTarget = chooseNextTarget(availableWaypoints);
       currentWrongCount = 0;
     }
+
+    markWaypointSeen(currentTarget);
 
     queuedNextTarget = null;
 
@@ -778,6 +842,7 @@
       stopRevealMode();
       refreshQueuedNextTarget();
       currentTarget = takeQueuedNextTarget();
+      markWaypointSeen(currentTarget);
       updateTopBar();
       requestRender();
       return;
