@@ -758,6 +758,10 @@
     const toleranceWorld = (QUIZ_CONFIG.tolerancePx || 18) / viewport.scale;
     const tappedWaypoint = findTappedWaypoint(tapWorld, toleranceWorld);
 
+    if (!tappedWaypoint) {
+      return;
+    }
+
     const dist = Math.hypot(tapWorld.x - currentTarget.x, tapWorld.y - currentTarget.y);
     const isCorrect = dist <= toleranceWorld;
 
