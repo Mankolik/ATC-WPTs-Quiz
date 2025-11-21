@@ -903,46 +903,96 @@
   }
 
   const panState = { active: false, lastX: 0, lastY: 0 };
-  const mouseTapState = { active: false, startX: 0, startY: 0, moved: false };
-  const TAP_MOVE_TOLERANCE = 4;
+  const pointerState = {
+    activeId: null,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    isDragging: false,
+    lastTapTime: 0,
+  };
+
+  const DRAG_DISTANCE_THRESHOLD = 10;
+  const TAP_COOLDOWN_MS = 150;
 
   function getCanvasPoint(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     return { x: clientX - rect.left, y: clientY - rect.top };
   }
 
-  function setupMouseControls() {
-    canvas.addEventListener('mousedown', (event) => {
-      if (event.button !== 0) return;
-      const { x, y } = getCanvasPoint(event.clientX, event.clientY);
-      mouseTapState.active = true;
-      mouseTapState.startX = x;
-      mouseTapState.startY = y;
-      mouseTapState.moved = false;
-      startPan(x, y);
-    });
+  function setupPointerControls() {
+    const endPointer = (event) => {
+      if (pointerState.activeId !== event.pointerId) return;
 
-    window.addEventListener('mousemove', (event) => {
-      if (!panState.active) return;
-      const { x, y } = getCanvasPoint(event.clientX, event.clientY);
-      if (mouseTapState.active && !mouseTapState.moved) {
-        const delta = Math.hypot(x - mouseTapState.startX, y - mouseTapState.startY);
-        if (delta > TAP_MOVE_TOLERANCE) {
-          mouseTapState.moved = true;
+      if (pointerState.isDragging) {
+        endPan();
+      } else {
+        const now = performance.now();
+        if (now - pointerState.lastTapTime >= TAP_COOLDOWN_MS) {
+          pointerState.lastTapTime = now;
+          const { x, y } = getCanvasPoint(event.clientX, event.clientY);
+          handleCanvasTap(x, y);
         }
       }
-      continuePan(x, y);
-    });
 
-    window.addEventListener('mouseup', (event) => {
-      if (event.button === 0 && mouseTapState.active && !mouseTapState.moved) {
-        const { x, y } = getCanvasPoint(event.clientX, event.clientY);
-        handleCanvasTap(x, y);
+      if (canvas.hasPointerCapture?.(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId);
       }
 
-      mouseTapState.active = false;
-      endPan();
-    });
+      pointerState.activeId = null;
+      pointerState.isDragging = false;
+      pointerState.startX = 0;
+      pointerState.startY = 0;
+      pointerState.lastX = 0;
+      pointerState.lastY = 0;
+      event.preventDefault();
+    };
+
+    canvas.addEventListener(
+      'pointerdown',
+      (event) => {
+        if (pointerState.activeId !== null) return;
+
+        const { x, y } = getCanvasPoint(event.clientX, event.clientY);
+        pointerState.activeId = event.pointerId;
+        pointerState.startX = x;
+        pointerState.startY = y;
+        pointerState.lastX = x;
+        pointerState.lastY = y;
+        pointerState.isDragging = false;
+        canvas.setPointerCapture(event.pointerId);
+        event.preventDefault();
+      },
+      { passive: false }
+    );
+
+    canvas.addEventListener(
+      'pointermove',
+      (event) => {
+        if (pointerState.activeId !== event.pointerId) return;
+
+        const { x, y } = getCanvasPoint(event.clientX, event.clientY);
+        const dragDistance = Math.hypot(x - pointerState.startX, y - pointerState.startY);
+
+        if (!pointerState.isDragging && dragDistance > DRAG_DISTANCE_THRESHOLD) {
+          pointerState.isDragging = true;
+          startPan(x, y);
+        }
+
+        if (pointerState.isDragging) {
+          continuePan(x, y);
+          event.preventDefault();
+        }
+
+        pointerState.lastX = x;
+        pointerState.lastY = y;
+      },
+      { passive: false }
+    );
+
+    canvas.addEventListener('pointerup', endPointer, { passive: false });
+    canvas.addEventListener('pointercancel', endPointer, { passive: false });
 
     canvas.addEventListener(
       'wheel',
@@ -955,130 +1005,9 @@
       },
       { passive: false }
     );
-
   }
 
-  const touchState = {
-    mode: 'none',
-    lastX: 0,
-    lastY: 0,
-    lastDistance: 0,
-    lastMidpoint: null,
-  };
-
-  function getTouchPoint(touch) {
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: touch.clientX - rect.left,
-      y: touch.clientY - rect.top,
-    };
-  }
-
-  function distance(a, b) {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    return Math.hypot(dx, dy);
-  }
-
-  function midpoint(a, b) {
-    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-  }
-
-  function setupTouchControls() {
-    canvas.addEventListener(
-      'touchstart',
-      (event) => {
-        if (!projection) return;
-        if (event.touches.length === 1) {
-          const point = getTouchPoint(event.touches[0]);
-          touchState.mode = 'pan';
-          startPan(point.x, point.y);
-          touchState.lastX = point.x;
-          touchState.lastY = point.y;
-        } else if (event.touches.length >= 2) {
-          endPan();
-          const first = getTouchPoint(event.touches[0]);
-          const second = getTouchPoint(event.touches[1]);
-          touchState.mode = 'pinch';
-          touchState.lastDistance = distance(first, second);
-          touchState.lastMidpoint = midpoint(first, second);
-        }
-      },
-      { passive: false }
-    );
-
-    canvas.addEventListener(
-      'touchmove',
-      (event) => {
-        if (!projection) return;
-        event.preventDefault();
-
-        if (event.touches.length === 1 && touchState.mode === 'pan') {
-          const point = getTouchPoint(event.touches[0]);
-          continuePan(point.x, point.y);
-        } else if (event.touches.length >= 2) {
-          const first = getTouchPoint(event.touches[0]);
-          const second = getTouchPoint(event.touches[1]);
-          const currentDistance = distance(first, second);
-          const currentMidpoint = midpoint(first, second);
-
-          if (touchState.mode !== 'pinch') {
-            touchState.mode = 'pinch';
-            touchState.lastDistance = currentDistance;
-            touchState.lastMidpoint = currentMidpoint;
-            return;
-          }
-
-          if (touchState.lastDistance > 0) {
-            const factor = currentDistance / touchState.lastDistance;
-            zoomAt(touchState.lastMidpoint.x, touchState.lastMidpoint.y, factor);
-          }
-
-          viewport.offsetX += currentMidpoint.x - touchState.lastMidpoint.x;
-          viewport.offsetY += currentMidpoint.y - touchState.lastMidpoint.y;
-
-          touchState.lastDistance = currentDistance;
-          touchState.lastMidpoint = currentMidpoint;
-          requestRender();
-        }
-      },
-      { passive: false }
-    );
-
-    canvas.addEventListener(
-      'touchend',
-      (event) => {
-        if (event.touches.length === 1) {
-          const point = getTouchPoint(event.touches[0]);
-          touchState.mode = 'pan';
-          startPan(point.x, point.y);
-          touchState.lastX = point.x;
-          touchState.lastY = point.y;
-        } else {
-          touchState.mode = 'none';
-          endPan();
-        }
-
-        if (event.touches.length === 0 && event.changedTouches.length === 1) {
-          const point = getTouchPoint(event.changedTouches[0]);
-          handleCanvasTap(point.x, point.y);
-        }
-      },
-      { passive: false }
-    );
-
-    canvas.addEventListener(
-      'touchcancel',
-      () => {
-        touchState.mode = 'none';
-        endPan();
-      },
-      { passive: false }
-    );
-  }
-
-  setupMouseControls();
-  setupTouchControls();
+  setupPointerControls();
 
   window.addEventListener('resize', resizeCanvas, { passive: true });
   window.addEventListener('load', init);
