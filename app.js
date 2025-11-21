@@ -3,7 +3,10 @@
   const ctx = canvas.getContext('2d');
   const topBar = document.getElementById('topBar');
   const topBarTitle = document.querySelector('#topBar .title');
-  const drawerContent = document.querySelector('#drawer .drawer-content');
+  const firPanel = document.getElementById('firPanel');
+  const firOverlay = document.getElementById('firOverlay');
+  const firFab = document.getElementById('firFab');
+  const firContent = firPanel?.querySelector('.drawer-content');
 
   const viewport = { scale: 1, offsetX: 0, offsetY: 0 };
 
@@ -21,6 +24,7 @@
   let revealState = { active: false, visible: true, timerId: null };
   const waypointFeedback = new Map();
   let initializationError = null;
+  let firPanelOpen = false;
 
   const MIN_SCALE = 7000;
   const MAX_SCALE = 25000;
@@ -235,11 +239,11 @@
   }
 
   function renderFIRControls() {
-    if (!drawerContent) return;
-    drawerContent.innerHTML = '';
+    if (!firContent) return;
+    firContent.innerHTML = '';
 
     if (!firOptions.length) {
-      drawerContent.textContent = 'No FIR data available.';
+      firContent.textContent = 'No FIR data available.';
       return;
     }
 
@@ -265,7 +269,7 @@
     });
 
     actions.append(selectAllButton, selectNoneButton);
-    drawerContent.appendChild(actions);
+    firContent.appendChild(actions);
 
     const firList = document.createElement('div');
     firList.className = 'fir-list';
@@ -294,13 +298,37 @@
       firList.appendChild(option);
     });
 
-    drawerContent.appendChild(firList);
+    firContent.appendChild(firList);
   }
 
   function syncFIRControls() {
-    drawerContent?.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+    firContent?.querySelectorAll('input[type="checkbox"]').forEach((input) => {
       input.checked = enabledFIRs.has(input.value);
     });
+  }
+
+  function setFIRPanelOpen(open) {
+    if (!firPanel || !firOverlay || !firFab) return;
+    firPanelOpen = open;
+    firPanel.classList.toggle('open', open);
+    firOverlay.classList.toggle('active', open);
+    firFab.setAttribute('aria-expanded', open ? 'true' : 'false');
+    firOverlay.setAttribute('aria-hidden', open ? 'false' : 'true');
+  }
+
+  function toggleFIRPanel() {
+    setFIRPanelOpen(!firPanelOpen);
+  }
+
+  function setupFIRPanelControls() {
+    setFIRPanelOpen(false);
+
+    firFab?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleFIRPanel();
+    });
+
+    firOverlay?.addEventListener('click', () => setFIRPanelOpen(false));
   }
 
   function updateVisibleWaypoints() {
@@ -1134,6 +1162,7 @@
     );
   }
 
+  setupFIRPanelControls();
   setupPointerControls();
 
   window.addEventListener('resize', resizeCanvas, { passive: true });

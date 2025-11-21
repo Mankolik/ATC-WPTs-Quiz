@@ -14,10 +14,13 @@
     <main id="stage">
       <canvas id="mapCanvas"></canvas>
     </main>
-    <details id="drawer" open>
-      <summary>FIR categories</summary>
+    <div id="firOverlay" class="fir-overlay" aria-hidden="true"></div>
+    <div id="firPanel" class="fir-panel" role="dialog" aria-label="FIR selection">
       <div class="drawer-content"></div>
-    </details>
+    </div>
+    <button id="firFab" type="button" class="fir-fab" aria-expanded="false" aria-controls="firPanel">
+      FIR
+    </button>
   </div>
   <script src="app.js"></script>
 </body>
