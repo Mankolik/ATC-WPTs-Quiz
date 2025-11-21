@@ -10,8 +10,8 @@
   let epwwBounds = null;
   let renderScheduled = false;
 
-  const MIN_SCALE = 35;
-  const MAX_SCALE = 120;
+  const MIN_SCALE = 7000;
+  const MAX_SCALE = 25000;
 
   const DEFAULT_VIEW_BOUNDS = {
     minLon: 14.156666,
@@ -90,7 +90,7 @@
       return { ...wp, x, y };
     });
 
-    epwwBounds = computeWaypointBounds('EPWW');
+    epwwBounds = computeRegionBounds('WARSZAWA FIR', 'EPWW');
   }
 
   function getPreferredBounds(firData, waypointList) {
@@ -361,33 +361,42 @@
     };
   }
 
-  function computeWaypointBounds(firCode) {
-    const bounds = waypoints
+  function computeRegionBounds(firName, firCode) {
+    if (!projection) return null;
+
+    const bounds = {
+      minX: Infinity,
+      maxX: -Infinity,
+      minY: Infinity,
+      maxY: -Infinity,
+    };
+
+    const addPoint = (x, y) => {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      bounds.minX = Math.min(bounds.minX, x);
+      bounds.maxX = Math.max(bounds.maxX, x);
+      bounds.minY = Math.min(bounds.minY, y);
+      bounds.maxY = Math.max(bounds.maxY, y);
+    };
+
+    const firFeatures = filterFIRFeatures(firGeoJSON, firName)?.features ?? [];
+    firFeatures.forEach((feature) => {
+      forEachCoordinate(feature.geometry, (lon, lat) => {
+        const { x, y } = projection.project(lon, lat);
+        addPoint(x, y);
+      });
+    });
+
+    waypoints
       .filter((wp) => wp.fir === firCode)
-      .reduce(
-        (acc, wp) => {
-          if (!Number.isFinite(wp.x) || !Number.isFinite(wp.y)) return acc;
-          return {
-            minX: Math.min(acc.minX, wp.x),
-            maxX: Math.max(acc.maxX, wp.x),
-            minY: Math.min(acc.minY, wp.y),
-            maxY: Math.max(acc.maxY, wp.y),
-          };
-        },
-        {
-          minX: Infinity,
-          maxX: -Infinity,
-          minY: Infinity,
-          maxY: -Infinity,
-        }
-      );
+      .forEach((wp) => addPoint(wp.x, wp.y));
 
     return Number.isFinite(bounds.minX) ? bounds : null;
   }
 
   function fitViewToEPWW() {
     if (!epwwBounds || !canvas.width || !canvas.height) return;
-    fitViewToBounds(epwwBounds, 1.6);
+    fitViewToBounds(epwwBounds, 1.2);
   }
 
   function fitViewToBounds(bounds, targetFill = 0.85) {
