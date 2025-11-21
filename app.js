@@ -20,6 +20,7 @@
   let currentWrongCount = 0;
   let revealState = { active: false, visible: true, timerId: null };
   const waypointFeedback = new Map();
+  let initializationError = null;
 
   const MIN_SCALE = 7000;
   const MAX_SCALE = 25000;
@@ -45,9 +46,12 @@
   };
 
   const DATA_ROOT = 'data';
-  const WAYPOINT_FILES = ['EPWW'];
+  const WAYPOINTS_PATH = `${DATA_ROOT}/waypoints`;
+  const WAYPOINT_INDEX_FILE = 'index.json';
+  const WAYPOINT_INDEX_ERROR = 'Failed to load FIR manifest';
 
   const FIR_DISABLED_MESSAGE = 'Enable at least one FIR';
+  const MANIFEST_EMPTY_MESSAGE = 'No FIR files listed in manifest';
 
   async function loadFIRMap() {
     const response = await fetch(`${DATA_ROOT}/FIRmap.json`);
@@ -58,8 +62,10 @@
   }
 
   async function fetchJSONFrom(paths) {
+    const triedPaths = [];
     for (const path of paths) {
       try {
+        triedPaths.push(path);
         const response = await fetch(path);
         if (response.ok) {
           return await response.json();
@@ -68,14 +74,54 @@
         console.warn(`Unable to fetch ${path}`, error);
       }
     }
-    throw new Error('Failed to load waypoints');
+    throw new Error(`Failed to load waypoints from: ${triedPaths.join(', ')}`);
+  }
+
+  async function loadWaypointIndex() {
+    const response = await fetch(`${WAYPOINTS_PATH}/${WAYPOINT_INDEX_FILE}`);
+    if (!response.ok) {
+      throw new Error(WAYPOINT_INDEX_ERROR);
+    }
+
+    const entries = await response.json();
+    const files = Array.isArray(entries)
+      ? entries.map((item) => `${item}`.trim()).filter(Boolean)
+      : [];
+
+    if (!files.length) {
+      throw new Error(MANIFEST_EMPTY_MESSAGE);
+    }
+
+    return files;
+  }
+
+  function firCodeFromFilename(filename) {
+    const match = filename?.match(/([^/]+?)(?:\.[^.]+)?$/);
+    return match ? match[1].toUpperCase() : 'FIR';
+  }
+
+  function buildWaypointPaths(filename) {
+    const safeName = filename?.trim();
+    if (!safeName) return [];
+
+    const nameOnly = safeName.split('/').pop();
+    const stem = nameOnly.replace(/\.geojson$/i, '');
+    const paths = new Set();
+
+    paths.add(`${WAYPOINTS_PATH}/${nameOnly}`);
+    paths.add(`${WAYPOINTS_PATH}/${stem}.geojson`);
+    paths.add(`${WAYPOINTS_PATH}/${stem}.geoJSON`);
+
+    return [...paths];
   }
 
   async function loadWaypoints() {
     const allWaypoints = [];
+    const waypointFiles = await loadWaypointIndex();
 
-    for (const firCode of WAYPOINT_FILES) {
-      const paths = [`${DATA_ROOT}/${firCode}.geoJSON`, `${DATA_ROOT}/${firCode}.geojson`];
+    for (const file of waypointFiles) {
+      const firCode = firCodeFromFilename(file);
+      const paths = buildWaypointPaths(file);
       const data = await fetchJSONFrom(paths);
       const features = data?.features ?? [];
 
@@ -436,6 +482,11 @@
   function updateTopBar() {
     if (!topBarTitle) return;
 
+    if (initializationError) {
+      topBarTitle.textContent = initializationError;
+      return;
+    }
+
     if (!enabledFIRs.size) {
       topBarTitle.textContent = FIR_DISABLED_MESSAGE;
       return;
@@ -447,6 +498,11 @@
     }
 
     topBarTitle.textContent = 'Waypoint Name';
+  }
+
+  function setInitializationError(message) {
+    initializationError = message;
+    updateTopBar();
   }
 
   function flashTopBar(type) {
@@ -760,6 +816,7 @@
 
   async function init() {
     resizeCanvas();
+    initializationError = null;
 
     try {
       const [firData, loadedWaypoints] = await Promise.all([
@@ -782,6 +839,7 @@
       requestRender();
     } catch (error) {
       console.error('Failed to initialize map', error);
+      setInitializationError(error?.message || WAYPOINT_INDEX_ERROR);
     }
   }
 
