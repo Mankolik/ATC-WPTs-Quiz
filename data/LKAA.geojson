@@ -1,0 +1,226 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "IPRUX"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          13.223319,
+          49.495378
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "VALPI"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          17.950278,
+          49.024722
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "MIKOV"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          16.621003,
+          48.784744
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "BUDEX"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          14.336028,
+          48.948328
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "OKG"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.405739,
+          50.065147
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "RAPET"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.338611,
+          50.190556
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "MAKAL"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          18.165833,
+          49.246111
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "REVMA"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          18.700278,
+          49.497222
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "BILNA"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          18.447222,
+          49.393611
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "KONAR"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          13.065578,
+          50.445139
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "VARIK"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          16.234167,
+          48.927222
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "MAREM"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          13.628889,
+          50.715556
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "GOLOP"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          14.495731,
+          50.585761
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "EROKA"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          13.690717,
+          50.097058
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "NIRGO"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          13.132219,
+          49.330944
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "RUDAP"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          13.265556,
+          49.241389
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "LEDVA"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          16.789194,
+          48.728789
+        ]
+      }
+    }
+  ]
+}
