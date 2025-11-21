@@ -6,10 +6,11 @@
   let waypoints = [];
   let projection = null;
 
-  const WAYPOINT_PATHS = ['/data/EPWW.geoJSON', '/data/EPWW.geojson'];
+  const DATA_ROOT = 'data';
+  const WAYPOINT_PATHS = [`${DATA_ROOT}/EPWW.geoJSON`, `${DATA_ROOT}/EPWW.geojson`];
 
   async function loadFIRMap() {
-    const response = await fetch('/data/FIRmap.json');
+    const response = await fetch(`${DATA_ROOT}/FIRmap.json`);
     if (!response.ok) {
       throw new Error(`Failed to load FIR map: ${response.status}`);
     }
