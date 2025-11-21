@@ -164,9 +164,10 @@
   function restoreEnabledFIRs(allFIRs) {
     try {
       const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-      const valid = stored?.filter((fir) => allFIRs.includes(fir));
-      if (valid?.length) {
-        return new Set(valid);
+      const valid = stored?.filter((fir) => allFIRs.includes(fir)) || [];
+      if (valid.length) {
+        const missing = allFIRs.filter((fir) => !valid.includes(fir));
+        return new Set([...valid, ...missing]);
       }
     } catch (error) {
       console.warn('Failed to restore FIR preferences', error);
