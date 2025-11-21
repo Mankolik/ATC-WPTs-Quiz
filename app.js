@@ -11,7 +11,7 @@
   let renderScheduled = false;
 
   const MIN_SCALE = 35;
-  const MAX_SCALE = 120;
+  const MAX_SCALE = 2000;
 
   const DEFAULT_VIEW_BOUNDS = {
     minLon: 14.156666,
