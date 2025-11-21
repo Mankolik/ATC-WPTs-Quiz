@@ -1,6 +1,7 @@
 (function () {
   const canvas = document.getElementById('mapCanvas');
   const ctx = canvas.getContext('2d');
+  const topBar = document.getElementById('topBar');
   const topBarTitle = document.querySelector('#topBar .title');
   const drawerContent = document.querySelector('#drawer .drawer-content');
 
@@ -15,11 +16,24 @@
   let projection = null;
   let epwwBounds = null;
   let renderScheduled = false;
+  let currentWrongCount = 0;
+  let revealState = { active: false, visible: true, timerId: null };
 
   const MIN_SCALE = 7000;
   const MAX_SCALE = 25000;
 
   const STORAGE_KEY = 'enabledFIRs:v1';
+  const QUIZ_STORAGE_PREFIX = 'waypointStats:v1:';
+
+  const QUIZ_CONFIG = {
+    tolerancePx: 18,
+    wrongIntervalsMs: [20000, 40000, 60000],
+    correctNoWrongMs: 15 * 60 * 1000,
+    correctWithWrongMs: 5 * 60 * 1000,
+    correctStreakMultiplier: 1.7,
+    maxCorrectIntervalMs: 2 * 60 * 60 * 1000,
+    revealFlashMs: 300,
+  };
 
   const DEFAULT_VIEW_BOUNDS = {
     minLon: 14.156666,
@@ -109,6 +123,39 @@
     return new Set(allFIRs);
   }
 
+  function defaultStats() {
+    return { wrongStreak: 0, correctStreak: 0, dueAt: 0, lastShownAt: 0 };
+  }
+
+  function loadWaypointStats(id) {
+    try {
+      const raw = localStorage.getItem(`${QUIZ_STORAGE_PREFIX}${id}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch (error) {
+      console.warn('Failed to load waypoint stats', error);
+      return null;
+    }
+  }
+
+  function persistWaypointStats(waypoint) {
+    if (!waypoint?.id || !waypoint?.stats) return;
+    try {
+      localStorage.setItem(
+        `${QUIZ_STORAGE_PREFIX}${waypoint.id}`,
+        JSON.stringify(waypoint.stats)
+      );
+    } catch (error) {
+      console.warn('Failed to persist waypoint stats', error);
+    }
+  }
+
+  function mergeStoredStats(waypointList) {
+    waypointList.forEach((wp) => {
+      const stored = loadWaypointStats(wp.id);
+      wp.stats = { ...defaultStats(), ...(stored || {}) };
+    });
+  }
+
   function persistEnabledFIRs() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify([...enabledFIRs]));
@@ -192,6 +239,47 @@
       : [];
   }
 
+  function wrongInterval(streak) {
+    if (streak <= 0) return QUIZ_CONFIG.wrongIntervalsMs[0];
+    const index = Math.min(streak - 1, QUIZ_CONFIG.wrongIntervalsMs.length - 1);
+    return QUIZ_CONFIG.wrongIntervalsMs[index];
+  }
+
+  function baseCorrectInterval(wrongsBeforeCorrect) {
+    if (wrongsBeforeCorrect === 0) return QUIZ_CONFIG.correctNoWrongMs;
+    if (wrongsBeforeCorrect <= 2) return QUIZ_CONFIG.correctWithWrongMs;
+    return QUIZ_CONFIG.correctWithWrongMs;
+  }
+
+  function applyWrong(waypoint) {
+    if (!waypoint?.stats) waypoint.stats = defaultStats();
+    const now = Date.now();
+    waypoint.stats.wrongStreak += 1;
+    waypoint.stats.correctStreak = 0;
+    waypoint.stats.dueAt = now + wrongInterval(waypoint.stats.wrongStreak);
+    waypoint.stats.lastShownAt = now;
+    persistWaypointStats(waypoint);
+  }
+
+  function applyCorrect(waypoint, wrongsBeforeCorrect) {
+    if (!waypoint?.stats) waypoint.stats = defaultStats();
+    const now = Date.now();
+    waypoint.stats.wrongStreak = 0;
+    waypoint.stats.correctStreak += 1;
+
+    const base = baseCorrectInterval(wrongsBeforeCorrect);
+    const streakMultiplier =
+      waypoint.stats.correctStreak > 1
+        ? Math.pow(QUIZ_CONFIG.correctStreakMultiplier, waypoint.stats.correctStreak - 1)
+        : 1;
+
+    const interval = Math.min(base * streakMultiplier, QUIZ_CONFIG.maxCorrectIntervalMs);
+
+    waypoint.stats.dueAt = now + interval;
+    waypoint.stats.lastShownAt = now;
+    persistWaypointStats(waypoint);
+  }
+
   function onFIRSelectionChanged() {
     persistEnabledFIRs();
     updateVisibleWaypoints();
@@ -201,12 +289,28 @@
 
   function chooseNextTarget(availableWaypoints) {
     if (!availableWaypoints.length) return null;
-    const index = Math.floor(Math.random() * availableWaypoints.length);
-    return availableWaypoints[index];
+    const now = Date.now();
+    const due = availableWaypoints.filter(
+      (wp) => !wp.stats?.dueAt || wp.stats.dueAt <= now
+    );
+
+    if (due.length) {
+      const index = Math.floor(Math.random() * due.length);
+      return due[index];
+    }
+
+    const jittered = availableWaypoints.map((wp) => ({
+      wp,
+      value: (wp.stats?.dueAt ?? now) + Math.random() * 2000,
+    }));
+
+    jittered.sort((a, b) => a.value - b.value);
+    return jittered[0].wp;
   }
 
   function updateCurrentTarget() {
     if (!enabledFIRs.size) {
+      stopRevealMode();
       currentTarget = null;
       updateTopBar();
       return;
@@ -215,6 +319,7 @@
     const availableWaypoints = visibleWaypoints;
 
     if (!availableWaypoints.length) {
+      stopRevealMode();
       currentTarget = null;
       updateTopBar();
       return;
@@ -222,9 +327,11 @@
 
     if (!currentTarget || !enabledFIRs.has(currentTarget.fir)) {
       currentTarget = chooseNextTarget(availableWaypoints);
+      currentWrongCount = 0;
     }
 
     updateTopBar();
+    requestRender();
   }
 
   function updateTopBar() {
@@ -241,6 +348,33 @@
     }
 
     topBarTitle.textContent = 'Waypoint Name';
+  }
+
+  function flashTopBar(type) {
+    if (!topBar) return;
+    const className = type === 'correct' ? 'flash-correct' : 'flash-wrong';
+    topBar.classList.remove('flash-correct', 'flash-wrong');
+    // force reflow to allow retriggering the flash
+    void topBar.offsetWidth;
+    topBar.classList.add(className);
+    setTimeout(() => topBar.classList.remove(className), QUIZ_CONFIG.revealFlashMs);
+  }
+
+  function startRevealMode() {
+    if (revealState.active) return;
+    revealState = { active: true, visible: true, timerId: null };
+    revealState.timerId = setInterval(() => {
+      revealState.visible = !revealState.visible;
+      requestRender();
+    }, QUIZ_CONFIG.revealFlashMs);
+  }
+
+  function stopRevealMode() {
+    if (revealState.timerId) {
+      clearInterval(revealState.timerId);
+    }
+    revealState = { active: false, visible: true, timerId: null };
+    requestRender();
   }
 
   function updateProjection() {
@@ -438,14 +572,16 @@
   }
 
   function drawWaypoints() {
-    ctx.fillStyle = '#333';
-
     visibleWaypoints.forEach((wp) => {
       if (!Number.isFinite(wp.x) || !Number.isFinite(wp.y)) return;
+      const isTarget = currentTarget?.id === wp.id;
+      if (revealState.active && isTarget && !revealState.visible) return;
+
       const radius = 3.5;
       const { x, y } = worldToScreen(wp);
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = isTarget ? '#0ea5e9' : '#333';
       ctx.fill();
     });
   }
@@ -509,6 +645,7 @@
 
       firGeoJSON = firData;
       waypoints = loadedWaypoints;
+      mergeStoredStats(waypoints);
 
       firOptions = uniqueFIRs(waypoints);
       enabledFIRs = restoreEnabledFIRs(firOptions);
@@ -536,6 +673,39 @@
       x: (x - viewport.offsetX) / viewport.scale,
       y: (y - viewport.offsetY) / viewport.scale,
     };
+  }
+
+  function handleCanvasTap(screenX, screenY) {
+    if (!projection || !currentTarget) return;
+
+    const tapWorld = screenToWorld(screenX, screenY);
+    const toleranceWorld = (QUIZ_CONFIG.tolerancePx || 18) / viewport.scale;
+    const dist = Math.hypot(tapWorld.x - currentTarget.x, tapWorld.y - currentTarget.y);
+    const isCorrect = dist <= toleranceWorld;
+
+    if (revealState.active && !isCorrect) {
+      return;
+    }
+
+    if (isCorrect) {
+      const wrongsBeforeCorrect = currentWrongCount;
+      flashTopBar('correct');
+      applyCorrect(currentTarget, wrongsBeforeCorrect);
+      currentWrongCount = 0;
+      stopRevealMode();
+      currentTarget = chooseNextTarget(visibleWaypoints) || null;
+      updateTopBar();
+      requestRender();
+      return;
+    }
+
+    currentWrongCount += 1;
+    flashTopBar('wrong');
+    applyWrong(currentTarget);
+    if (currentWrongCount >= 3) {
+      startRevealMode();
+    }
+    requestRender();
   }
 
   function computeRegionBounds(firName, firCode) {
@@ -681,6 +851,12 @@
       },
       { passive: false }
     );
+
+    canvas.addEventListener('click', (event) => {
+      if (!projection) return;
+      const { x, y } = getCanvasPoint(event.clientX, event.clientY);
+      handleCanvasTap(x, y);
+    });
   }
 
   const touchState = {
@@ -782,6 +958,11 @@
         } else {
           touchState.mode = 'none';
           endPan();
+        }
+
+        if (event.touches.length === 0 && event.changedTouches.length === 1) {
+          const point = getTouchPoint(event.changedTouches[0]);
+          handleCanvasTap(point.x, point.y);
         }
       },
       { passive: false }

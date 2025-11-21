@@ -47,6 +47,16 @@ body {
   z-index: 2;
 }
 
+#topBar.flash-correct {
+  background: #dcfce7;
+  transition: background 0.2s ease;
+}
+
+#topBar.flash-wrong {
+  background: #fee2e2;
+  transition: background 0.2s ease;
+}
+
 #stage {
   flex: 1;
   display: flex;
