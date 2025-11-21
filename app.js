@@ -6,6 +6,13 @@
   let waypoints = [];
   let projection = null;
 
+  const DEFAULT_VIEW_BOUNDS = {
+    minLon: 14.156666,
+    maxLon: 24.1,
+    minLat: 49.0,
+    maxLat: 55.85,
+  };
+
   const DATA_ROOT = 'data';
   const WAYPOINT_PATHS = [`${DATA_ROOT}/EPWW.geoJSON`, `${DATA_ROOT}/EPWW.geojson`];
 
@@ -61,7 +68,7 @@
   function updateProjection() {
     if (!canvas.width || !canvas.height) return;
 
-    const bounds = computeBounds(firGeoJSON, waypoints);
+    const bounds = getPreferredBounds(firGeoJSON, waypoints);
     if (!bounds) {
       projection = null;
       return;
@@ -72,6 +79,23 @@
       const { x, y } = projection.project(wp.lon, wp.lat);
       return { ...wp, x, y };
     });
+  }
+
+  function getPreferredBounds(firData, waypointList) {
+    const warsawFirBounds = computeBounds(filterFIRFeatures(firData, 'WARSZAWA FIR'), waypointList);
+    if (warsawFirBounds) {
+      return warsawFirBounds;
+    }
+
+    return computeBounds(firData, waypointList) ?? DEFAULT_VIEW_BOUNDS;
+  }
+
+  function filterFIRFeatures(firData, firName) {
+    const features = firData?.features?.filter(
+      (feature) => feature?.properties?.AV_NAME === firName
+    );
+
+    return features?.length ? { ...firData, features } : firData;
   }
 
   function computeBounds(firData, waypointList) {
