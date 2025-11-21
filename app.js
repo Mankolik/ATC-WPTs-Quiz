@@ -1,17 +1,25 @@
 (function () {
   const canvas = document.getElementById('mapCanvas');
   const ctx = canvas.getContext('2d');
+  const topBarTitle = document.querySelector('#topBar .title');
+  const drawerContent = document.querySelector('#drawer .drawer-content');
 
   const viewport = { scale: 1, offsetX: 0, offsetY: 0 };
 
   let firGeoJSON = null;
   let waypoints = [];
+  let visibleWaypoints = [];
+  let firOptions = [];
+  let enabledFIRs = new Set();
+  let currentTarget = null;
   let projection = null;
   let epwwBounds = null;
   let renderScheduled = false;
 
   const MIN_SCALE = 7000;
   const MAX_SCALE = 25000;
+
+  const STORAGE_KEY = 'enabledFIRs:v1';
 
   const DEFAULT_VIEW_BOUNDS = {
     minLon: 14.156666,
@@ -21,7 +29,9 @@
   };
 
   const DATA_ROOT = 'data';
-  const WAYPOINT_PATHS = [`${DATA_ROOT}/EPWW.geoJSON`, `${DATA_ROOT}/EPWW.geojson`];
+  const WAYPOINT_FILES = ['EPWW'];
+
+  const FIR_DISABLED_MESSAGE = 'Enable at least one FIR';
 
   async function loadFIRMap() {
     const response = await fetch(`${DATA_ROOT}/FIRmap.json`);
@@ -46,22 +56,30 @@
   }
 
   async function loadWaypoints() {
-    const firCode = 'EPWW';
-    const data = await fetchJSONFrom(WAYPOINT_PATHS);
-    const features = data?.features ?? [];
+    const allWaypoints = [];
 
-    return features
-      .map((feature, index) => {
-        const [lon, lat] = feature?.geometry?.coordinates ?? [];
-        return {
-          id: feature?.id ?? `${firCode}-${index}`,
-          name: feature?.properties?.name ?? 'Unknown',
-          fir: feature?.properties?.fir ?? firCode,
-          lon,
-          lat,
-        };
-      })
-      .filter((wp) => Number.isFinite(wp.lon) && Number.isFinite(wp.lat));
+    for (const firCode of WAYPOINT_FILES) {
+      const paths = [`${DATA_ROOT}/${firCode}.geoJSON`, `${DATA_ROOT}/${firCode}.geojson`];
+      const data = await fetchJSONFrom(paths);
+      const features = data?.features ?? [];
+
+      const parsed = features
+        .map((feature, index) => {
+          const [lon, lat] = feature?.geometry?.coordinates ?? [];
+          return {
+            id: feature?.id ?? `${firCode}-${index}`,
+            name: feature?.properties?.name ?? 'Unknown',
+            fir: feature?.properties?.fir ?? firCode,
+            lon,
+            lat,
+          };
+        })
+        .filter((wp) => Number.isFinite(wp.lon) && Number.isFinite(wp.lat));
+
+      allWaypoints.push(...parsed);
+    }
+
+    return allWaypoints;
   }
 
   function resizeCanvas() {
@@ -71,6 +89,158 @@
     updateProjection();
     fitViewToEPWW();
     requestRender();
+  }
+
+  function uniqueFIRs(list) {
+    return Array.from(new Set(list.map((item) => item.fir).filter(Boolean))).sort();
+  }
+
+  function restoreEnabledFIRs(allFIRs) {
+    try {
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      const valid = stored?.filter((fir) => allFIRs.includes(fir));
+      if (valid?.length) {
+        return new Set(valid);
+      }
+    } catch (error) {
+      console.warn('Failed to restore FIR preferences', error);
+    }
+
+    return new Set(allFIRs);
+  }
+
+  function persistEnabledFIRs() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([...enabledFIRs]));
+    } catch (error) {
+      console.warn('Failed to persist FIR preferences', error);
+    }
+  }
+
+  function renderFIRControls() {
+    if (!drawerContent) return;
+    drawerContent.innerHTML = '';
+
+    if (!firOptions.length) {
+      drawerContent.textContent = 'No FIR data available.';
+      return;
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'drawer-actions';
+
+    const selectAllButton = document.createElement('button');
+    selectAllButton.type = 'button';
+    selectAllButton.textContent = 'Select all';
+    selectAllButton.addEventListener('click', () => {
+      enabledFIRs = new Set(firOptions);
+      syncFIRControls();
+      onFIRSelectionChanged();
+    });
+
+    const selectNoneButton = document.createElement('button');
+    selectNoneButton.type = 'button';
+    selectNoneButton.textContent = 'Select none';
+    selectNoneButton.addEventListener('click', () => {
+      enabledFIRs = new Set();
+      syncFIRControls();
+      onFIRSelectionChanged();
+    });
+
+    actions.append(selectAllButton, selectNoneButton);
+    drawerContent.appendChild(actions);
+
+    const firList = document.createElement('div');
+    firList.className = 'fir-list';
+
+    firOptions.forEach((fir) => {
+      const option = document.createElement('label');
+      option.className = 'fir-option';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = fir;
+      checkbox.checked = enabledFIRs.has(fir);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) {
+          enabledFIRs.add(fir);
+        } else {
+          enabledFIRs.delete(fir);
+        }
+        onFIRSelectionChanged();
+      });
+
+      const label = document.createElement('span');
+      label.textContent = fir;
+
+      option.append(checkbox, label);
+      firList.appendChild(option);
+    });
+
+    drawerContent.appendChild(firList);
+  }
+
+  function syncFIRControls() {
+    drawerContent?.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+      input.checked = enabledFIRs.has(input.value);
+    });
+  }
+
+  function updateVisibleWaypoints() {
+    visibleWaypoints = enabledFIRs.size
+      ? waypoints.filter((wp) => enabledFIRs.has(wp.fir))
+      : [];
+  }
+
+  function onFIRSelectionChanged() {
+    persistEnabledFIRs();
+    updateVisibleWaypoints();
+    updateCurrentTarget();
+    requestRender();
+  }
+
+  function chooseNextTarget(availableWaypoints) {
+    if (!availableWaypoints.length) return null;
+    const index = Math.floor(Math.random() * availableWaypoints.length);
+    return availableWaypoints[index];
+  }
+
+  function updateCurrentTarget() {
+    if (!enabledFIRs.size) {
+      currentTarget = null;
+      updateTopBar();
+      return;
+    }
+
+    const availableWaypoints = visibleWaypoints;
+
+    if (!availableWaypoints.length) {
+      currentTarget = null;
+      updateTopBar();
+      return;
+    }
+
+    if (!currentTarget || !enabledFIRs.has(currentTarget.fir)) {
+      currentTarget = chooseNextTarget(availableWaypoints);
+    }
+
+    updateTopBar();
+  }
+
+  function updateTopBar() {
+    if (!topBarTitle) return;
+
+    if (!enabledFIRs.size) {
+      topBarTitle.textContent = FIR_DISABLED_MESSAGE;
+      return;
+    }
+
+    if (currentTarget) {
+      topBarTitle.textContent = `${currentTarget.name} (${currentTarget.fir})`;
+      return;
+    }
+
+    topBarTitle.textContent = 'Waypoint Name';
   }
 
   function updateProjection() {
@@ -91,6 +261,7 @@
     });
 
     epwwBounds = computeRegionBounds('WARSZAWA FIR', 'EPWW');
+    updateVisibleWaypoints();
   }
 
   function getPreferredBounds(firData, waypointList) {
@@ -269,7 +440,7 @@
   function drawWaypoints() {
     ctx.fillStyle = '#333';
 
-    waypoints.forEach((wp) => {
+    visibleWaypoints.forEach((wp) => {
       if (!Number.isFinite(wp.x) || !Number.isFinite(wp.y)) return;
       const radius = 3.5;
       const { x, y } = worldToScreen(wp);
@@ -339,7 +510,13 @@
       firGeoJSON = firData;
       waypoints = loadedWaypoints;
 
+      firOptions = uniqueFIRs(waypoints);
+      enabledFIRs = restoreEnabledFIRs(firOptions);
+      renderFIRControls();
+
       updateProjection();
+      updateVisibleWaypoints();
+      updateCurrentTarget();
       fitViewToEPWW();
       requestRender();
     } catch (error) {
