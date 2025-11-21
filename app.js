@@ -18,6 +18,7 @@
   let renderScheduled = false;
   let currentWrongCount = 0;
   let revealState = { active: false, visible: true, timerId: null };
+  const waypointFeedback = new Map();
 
   const MIN_SCALE = 7000;
   const MAX_SCALE = 25000;
@@ -360,6 +361,24 @@
     setTimeout(() => topBar.classList.remove(className), QUIZ_CONFIG.revealFlashMs);
   }
 
+  function flashWaypointFeedback(waypointId, type) {
+    if (!waypointId) return;
+
+    const color = type === 'correct' ? '#22c55e' : '#ef4444';
+    const expiresAt = Date.now() + QUIZ_CONFIG.revealFlashMs;
+    waypointFeedback.set(waypointId, { color, expiresAt });
+
+    setTimeout(() => {
+      const feedback = waypointFeedback.get(waypointId);
+      if (feedback && feedback.expiresAt <= Date.now()) {
+        waypointFeedback.delete(waypointId);
+        requestRender();
+      }
+    }, QUIZ_CONFIG.revealFlashMs);
+
+    requestRender();
+  }
+
   function startRevealMode() {
     if (revealState.active) return;
     revealState = { active: true, visible: true, timerId: null };
@@ -577,11 +596,18 @@
       const isTarget = currentTarget?.id === wp.id;
       if (revealState.active && isTarget && !revealState.visible) return;
 
-      const radius = 3.5;
+      const radius = 7;
       const { x, y } = worldToScreen(wp);
+
+      const feedback = waypointFeedback.get(wp.id);
+      if (feedback && feedback.expiresAt <= Date.now()) {
+        waypointFeedback.delete(wp.id);
+      }
+
+      const fillColor = waypointFeedback.get(wp.id)?.color || '#333';
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fillStyle = isTarget ? '#0ea5e9' : '#333';
+      ctx.fillStyle = fillColor;
       ctx.fill();
     });
   }
@@ -690,6 +716,7 @@
     if (isCorrect) {
       const wrongsBeforeCorrect = currentWrongCount;
       flashTopBar('correct');
+      flashWaypointFeedback(currentTarget.id, 'correct');
       applyCorrect(currentTarget, wrongsBeforeCorrect);
       currentWrongCount = 0;
       stopRevealMode();
@@ -701,6 +728,7 @@
 
     currentWrongCount += 1;
     flashTopBar('wrong');
+    flashWaypointFeedback(currentTarget.id, 'wrong');
     applyWrong(currentTarget);
     if (currentWrongCount >= 3) {
       startRevealMode();
