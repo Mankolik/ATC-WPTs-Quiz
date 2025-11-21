@@ -10,8 +10,8 @@
   let epwwBounds = null;
   let renderScheduled = false;
 
-  const MIN_SCALE = 1;
-  const MAX_SCALE = 40;
+  const MIN_SCALE = 35;
+  const MAX_SCALE = 120;
 
   const DEFAULT_VIEW_BOUNDS = {
     minLon: 14.156666,
