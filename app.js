@@ -10,6 +10,9 @@
   let epwwBounds = null;
   let renderScheduled = false;
 
+  const MIN_SCALE = 1;
+  const MAX_SCALE = 40;
+
   const DEFAULT_VIEW_BOUNDS = {
     minLon: 14.156666,
     maxLon: 24.1,
@@ -384,7 +387,7 @@
 
   function fitViewToEPWW() {
     if (!epwwBounds || !canvas.width || !canvas.height) return;
-    fitViewToBounds(epwwBounds, 0.85);
+    fitViewToBounds(epwwBounds, 1.6);
   }
 
   function fitViewToBounds(bounds, targetFill = 0.85) {
@@ -414,7 +417,7 @@
   }
 
   function clampScale(value) {
-    return Math.min(Math.max(value, 0.5), 20);
+    return Math.min(Math.max(value, MIN_SCALE), MAX_SCALE);
   }
 
   function requestRender() {
