@@ -819,6 +819,8 @@
   }
 
   const panState = { active: false, lastX: 0, lastY: 0 };
+  const mouseTapState = { active: false, startX: 0, startY: 0, moved: false };
+  const TAP_MOVE_TOLERANCE = 4;
 
   function getCanvasPoint(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
@@ -829,16 +831,34 @@
     canvas.addEventListener('mousedown', (event) => {
       if (event.button !== 0) return;
       const { x, y } = getCanvasPoint(event.clientX, event.clientY);
+      mouseTapState.active = true;
+      mouseTapState.startX = x;
+      mouseTapState.startY = y;
+      mouseTapState.moved = false;
       startPan(x, y);
     });
 
     window.addEventListener('mousemove', (event) => {
       if (!panState.active) return;
       const { x, y } = getCanvasPoint(event.clientX, event.clientY);
+      if (mouseTapState.active && !mouseTapState.moved) {
+        const delta = Math.hypot(x - mouseTapState.startX, y - mouseTapState.startY);
+        if (delta > TAP_MOVE_TOLERANCE) {
+          mouseTapState.moved = true;
+        }
+      }
       continuePan(x, y);
     });
 
-    window.addEventListener('mouseup', endPan);
+    window.addEventListener('mouseup', (event) => {
+      if (event.button === 0 && mouseTapState.active && !mouseTapState.moved) {
+        const { x, y } = getCanvasPoint(event.clientX, event.clientY);
+        handleCanvasTap(x, y);
+      }
+
+      mouseTapState.active = false;
+      endPan();
+    });
 
     canvas.addEventListener(
       'wheel',
@@ -852,11 +872,6 @@
       { passive: false }
     );
 
-    canvas.addEventListener('click', (event) => {
-      if (!projection) return;
-      const { x, y } = getCanvasPoint(event.clientX, event.clientY);
-      handleCanvasTap(x, y);
-    });
   }
 
   const touchState = {
