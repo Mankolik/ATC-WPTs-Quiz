@@ -701,11 +701,29 @@
     };
   }
 
+  function findTappedWaypoint(worldPoint, toleranceWorld) {
+    let nearest = null;
+    let nearestDistance = Infinity;
+
+    visibleWaypoints.forEach((wp) => {
+      if (!Number.isFinite(wp.x) || !Number.isFinite(wp.y)) return;
+      const dist = Math.hypot(worldPoint.x - wp.x, worldPoint.y - wp.y);
+      if (dist <= toleranceWorld && dist < nearestDistance) {
+        nearest = wp;
+        nearestDistance = dist;
+      }
+    });
+
+    return nearest;
+  }
+
   function handleCanvasTap(screenX, screenY) {
     if (!projection || !currentTarget) return;
 
     const tapWorld = screenToWorld(screenX, screenY);
     const toleranceWorld = (QUIZ_CONFIG.tolerancePx || 18) / viewport.scale;
+    const tappedWaypoint = findTappedWaypoint(tapWorld, toleranceWorld);
+
     const dist = Math.hypot(tapWorld.x - currentTarget.x, tapWorld.y - currentTarget.y);
     const isCorrect = dist <= toleranceWorld;
 
@@ -728,7 +746,9 @@
 
     currentWrongCount += 1;
     flashTopBar('wrong');
-    flashWaypointFeedback(currentTarget.id, 'wrong');
+    if (tappedWaypoint?.id) {
+      flashWaypointFeedback(tappedWaypoint.id, 'wrong');
+    }
     applyWrong(currentTarget);
     if (currentWrongCount >= 3) {
       startRevealMode();
