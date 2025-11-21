@@ -74,7 +74,9 @@
       return;
     }
 
-    projection = createProjection(bounds, canvas.width, canvas.height);
+    projection = createProjection(bounds, firGeoJSON, waypoints, canvas.width, canvas.height);
+    if (!projection) return;
+
     waypoints = waypoints.map((wp) => {
       const { x, y } = projection.project(wp.lon, wp.lat);
       return { ...wp, x, y };
@@ -171,22 +173,77 @@
     }
   }
 
-  function createProjection(bounds, width, height) {
+  function createProjection(bounds, firData, waypointList, width, height) {
     const padding = Math.min(width, height) * 0.05;
     const usableWidth = Math.max(width - padding * 2, 1);
     const usableHeight = Math.max(height - padding * 2, 1);
 
-    const lonSpan = bounds.maxLon - bounds.minLon || 1;
-    const latSpan = bounds.maxLat - bounds.minLat || 1;
-    const scale = Math.min(usableWidth / lonSpan, usableHeight / latSpan);
+    const lat0Rad = degToRad((bounds.minLat + bounds.maxLat) / 2);
+
+    const toWorld = (lon, lat) => ({
+      x: degToRad(lon) * Math.cos(lat0Rad),
+      y: degToRad(lat),
+    });
+
+    const worldBounds = computeProjectedBounds(
+      firData,
+      waypointList,
+      toWorld,
+      bounds
+    );
+
+    if (!worldBounds) return null;
+
+    const spanX = worldBounds.maxX - worldBounds.minX || 1;
+    const spanY = worldBounds.maxY - worldBounds.minY || 1;
+    const scale = Math.min(usableWidth / spanX, usableHeight / spanY);
+
+    const offsetX = padding - worldBounds.minX * scale;
+    const offsetY = padding + worldBounds.maxY * scale;
 
     return {
       project(lon, lat) {
-        const x = padding + (lon - bounds.minLon) * scale;
-        const y = padding + (bounds.maxLat - lat) * scale;
+        const { x: worldX, y: worldY } = toWorld(lon, lat);
+        const x = offsetX + worldX * scale;
+        const y = offsetY - worldY * scale;
         return { x, y };
       },
     };
+  }
+
+  function computeProjectedBounds(firData, waypointList, toWorld, fallbackBounds) {
+    const bounds = {
+      minX: Infinity,
+      maxX: -Infinity,
+      minY: Infinity,
+      maxY: -Infinity,
+    };
+
+    const apply = (lon, lat) => {
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+      const { x, y } = toWorld(lon, lat);
+      bounds.minX = Math.min(bounds.minX, x);
+      bounds.maxX = Math.max(bounds.maxX, x);
+      bounds.minY = Math.min(bounds.minY, y);
+      bounds.maxY = Math.max(bounds.maxY, y);
+    };
+
+    firData?.features?.forEach((feature) => {
+      forEachCoordinate(feature.geometry, apply);
+    });
+
+    waypointList.forEach((wp) => apply(wp.lon, wp.lat));
+
+    if (!Number.isFinite(bounds.minX) && fallbackBounds) {
+      apply(fallbackBounds.minLon, fallbackBounds.minLat);
+      apply(fallbackBounds.maxLon, fallbackBounds.maxLat);
+    }
+
+    return Number.isFinite(bounds.minX) ? bounds : null;
+  }
+
+  function degToRad(value) {
+    return (value * Math.PI) / 180;
   }
 
   function render() {
