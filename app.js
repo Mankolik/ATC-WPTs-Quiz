@@ -13,6 +13,7 @@
   let firOptions = [];
   let enabledFIRs = new Set();
   let currentTarget = null;
+  let queuedNextTarget = null;
   let projection = null;
   let epwwBounds = null;
   let renderScheduled = false;
@@ -288,25 +289,56 @@
     requestRender();
   }
 
-  function chooseNextTarget(availableWaypoints) {
-    if (!availableWaypoints.length) return null;
+  function chooseNextTarget(availableWaypoints, { excludeId } = {}) {
+    const pool = excludeId
+      ? availableWaypoints.filter((wp) => wp.id !== excludeId)
+      : availableWaypoints;
+
+    if (!pool.length) return null;
     const now = Date.now();
-    const due = availableWaypoints.filter(
-      (wp) => !wp.stats?.dueAt || wp.stats.dueAt <= now
-    );
+    const due = pool.filter((wp) => !wp.stats?.dueAt || wp.stats.dueAt <= now);
 
     if (due.length) {
-      const index = Math.floor(Math.random() * due.length);
-      return due[index];
+      const sortedDue = [...due].sort(
+        (a, b) => (a.stats?.dueAt ?? now) - (b.stats?.dueAt ?? now)
+      );
+      return sortedDue[0];
     }
 
-    const jittered = availableWaypoints.map((wp) => ({
+    const jittered = pool.map((wp) => ({
       wp,
       value: (wp.stats?.dueAt ?? now) + Math.random() * 2000,
     }));
 
     jittered.sort((a, b) => a.value - b.value);
     return jittered[0].wp;
+  }
+
+  function refreshQueuedNextTarget() {
+    queuedNextTarget = chooseNextTarget(visibleWaypoints, {
+      excludeId: currentTarget?.id,
+    });
+  }
+
+  function takeQueuedNextTarget() {
+    if (!visibleWaypoints.length) {
+      queuedNextTarget = null;
+      return null;
+    }
+
+    const available = visibleWaypoints.filter((wp) => wp.id !== currentTarget?.id);
+    if (!available.length) {
+      queuedNextTarget = null;
+      return null;
+    }
+
+    const queuedIsValid = queuedNextTarget?.id
+      ? available.some((wp) => wp.id === queuedNextTarget.id)
+      : false;
+
+    const next = queuedIsValid ? queuedNextTarget : chooseNextTarget(available);
+    queuedNextTarget = null;
+    return next;
   }
 
   function updateCurrentTarget() {
@@ -330,6 +362,8 @@
       currentTarget = chooseNextTarget(availableWaypoints);
       currentWrongCount = 0;
     }
+
+    queuedNextTarget = null;
 
     updateTopBar();
     requestRender();
@@ -738,7 +772,8 @@
       applyCorrect(currentTarget, wrongsBeforeCorrect);
       currentWrongCount = 0;
       stopRevealMode();
-      currentTarget = chooseNextTarget(visibleWaypoints) || null;
+      refreshQueuedNextTarget();
+      currentTarget = takeQueuedNextTarget();
       updateTopBar();
       requestRender();
       return;
@@ -750,6 +785,7 @@
       flashWaypointFeedback(tappedWaypoint.id, 'wrong');
     }
     applyWrong(currentTarget);
+    refreshQueuedNextTarget();
     if (currentWrongCount >= 3) {
       startRevealMode();
     }
