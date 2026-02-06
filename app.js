@@ -779,12 +779,19 @@
   }
 
   function drawWaypoints() {
+    const scaleRange = MAX_SCALE - MIN_SCALE || 1;
+    const scaleRatio = Math.min(
+      Math.max((viewport.scale - MIN_SCALE) / scaleRange, 0),
+      1
+    );
+    const minRadius = 2.5;
+    const maxRadius = 7;
+    const radius = minRadius + (maxRadius - minRadius) * scaleRatio;
+
     visibleWaypoints.forEach((wp) => {
       if (!Number.isFinite(wp.x) || !Number.isFinite(wp.y)) return;
       const isTarget = currentTarget?.id === wp.id;
       if (revealState.active && isTarget && !revealState.visible) return;
-
-      const radius = 7;
       const { x, y } = worldToScreen(wp);
 
       const feedback = waypointFeedback.get(wp.id);
