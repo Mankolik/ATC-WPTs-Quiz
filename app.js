@@ -26,7 +26,7 @@
   let initializationError = null;
   let firPanelOpen = false;
 
-  const MIN_SCALE = 7000;
+  const MIN_SCALE = 1500;
   const MAX_SCALE = 25000;
 
   const STORAGE_KEY = 'enabledFIRs:v1';
@@ -149,9 +149,14 @@
   }
 
   function resizeCanvas() {
-    const { clientWidth, clientHeight } = canvas;
-    canvas.width = clientWidth;
-    canvas.height = clientHeight;
+    const rect = canvas.getBoundingClientRect();
+    const parentRect = canvas.parentElement?.getBoundingClientRect();
+    const width =
+      rect.width || parentRect?.width || canvas.clientWidth || window.innerWidth || 1;
+    const height =
+      rect.height || parentRect?.height || canvas.clientHeight || window.innerHeight || 1;
+    canvas.width = Math.max(1, Math.floor(width));
+    canvas.height = Math.max(1, Math.floor(height));
     updateProjection();
     fitViewToEPWW();
     requestRender();
@@ -1069,6 +1074,15 @@
     lastTapTime: 0,
   };
 
+  const pinchState = {
+    active: false,
+    startDistance: 0,
+    startScale: 1,
+    centerX: 0,
+    centerY: 0,
+  };
+
+  const pointerPositions = new Map();
   const DRAG_DISTANCE_THRESHOLD = 10;
   const TAP_COOLDOWN_MS = 150;
 
@@ -1077,13 +1091,80 @@
     return { x: clientX - rect.left, y: clientY - rect.top };
   }
 
+  function distanceBetweenPoints(pointA, pointB) {
+    return Math.hypot(pointA.x - pointB.x, pointA.y - pointB.y);
+  }
+
+  function centerBetweenPoints(pointA, pointB) {
+    return { x: (pointA.x + pointB.x) / 2, y: (pointA.y + pointB.y) / 2 };
+  }
+
+  function setScaleAt(pointX, pointY, nextScale) {
+    const clamped = clampScale(nextScale);
+    if (clamped === viewport.scale) return;
+    const worldPoint = screenToWorld(pointX, pointY);
+    viewport.scale = clamped;
+    viewport.offsetX = pointX - worldPoint.x * clamped;
+    viewport.offsetY = pointY - worldPoint.y * clamped;
+    requestRender();
+  }
+
+  function startPinch(pointA, pointB) {
+    const center = centerBetweenPoints(pointA, pointB);
+    pinchState.active = true;
+    pinchState.startDistance = Math.max(distanceBetweenPoints(pointA, pointB), 1);
+    pinchState.startScale = viewport.scale;
+    pinchState.centerX = center.x;
+    pinchState.centerY = center.y;
+    pointerState.isDragging = true;
+    panState.active = false;
+  }
+
+  function updatePinch(pointA, pointB) {
+    const center = centerBetweenPoints(pointA, pointB);
+    const distance = Math.max(distanceBetweenPoints(pointA, pointB), 1);
+    const factor = distance / pinchState.startDistance;
+    pinchState.centerX = center.x;
+    pinchState.centerY = center.y;
+    setScaleAt(center.x, center.y, pinchState.startScale * factor);
+  }
+
+  function endPinch() {
+    pinchState.active = false;
+    pinchState.startDistance = 0;
+    pinchState.startScale = viewport.scale;
+  }
+
   function setupPointerControls() {
     const endPointer = (event) => {
-      if (pointerState.activeId !== event.pointerId) return;
+      if (!pointerPositions.has(event.pointerId)) return;
 
-      if (pointerState.isDragging) {
+      pointerPositions.delete(event.pointerId);
+
+      if (pinchState.active && pointerPositions.size < 2) {
+        endPinch();
+        if (pointerPositions.size === 1) {
+          const [remainingId, remainingPoint] = [...pointerPositions.entries()][0];
+          pointerState.activeId = remainingId;
+          pointerState.startX = remainingPoint.x;
+          pointerState.startY = remainingPoint.y;
+          pointerState.lastX = remainingPoint.x;
+          pointerState.lastY = remainingPoint.y;
+          pointerState.isDragging = true;
+          startPan(remainingPoint.x, remainingPoint.y);
+        } else {
+          pointerState.activeId = null;
+          pointerState.isDragging = false;
+          pointerState.startX = 0;
+          pointerState.startY = 0;
+          pointerState.lastX = 0;
+          pointerState.lastY = 0;
+        }
+      }
+
+      if (pointerState.activeId === event.pointerId && pointerState.isDragging) {
         endPan();
-      } else {
+      } else if (pointerState.activeId === event.pointerId && !pinchState.active) {
         const now = performance.now();
         if (now - pointerState.lastTapTime >= TAP_COOLDOWN_MS) {
           pointerState.lastTapTime = now;
@@ -1096,27 +1177,34 @@
         canvas.releasePointerCapture(event.pointerId);
       }
 
-      pointerState.activeId = null;
-      pointerState.isDragging = false;
-      pointerState.startX = 0;
-      pointerState.startY = 0;
-      pointerState.lastX = 0;
-      pointerState.lastY = 0;
+      if (pointerState.activeId === event.pointerId) {
+        pointerState.activeId = null;
+        pointerState.isDragging = false;
+        pointerState.startX = 0;
+        pointerState.startY = 0;
+        pointerState.lastX = 0;
+        pointerState.lastY = 0;
+      }
       event.preventDefault();
     };
 
     canvas.addEventListener(
       'pointerdown',
       (event) => {
-        if (pointerState.activeId !== null) return;
-
         const { x, y } = getCanvasPoint(event.clientX, event.clientY);
-        pointerState.activeId = event.pointerId;
-        pointerState.startX = x;
-        pointerState.startY = y;
-        pointerState.lastX = x;
-        pointerState.lastY = y;
-        pointerState.isDragging = false;
+        pointerPositions.set(event.pointerId, { x, y });
+
+        if (pointerPositions.size === 1) {
+          pointerState.activeId = event.pointerId;
+          pointerState.startX = x;
+          pointerState.startY = y;
+          pointerState.lastX = x;
+          pointerState.lastY = y;
+          pointerState.isDragging = false;
+        } else if (pointerPositions.size === 2) {
+          const [pointA, pointB] = [...pointerPositions.values()];
+          startPinch(pointA, pointB);
+        }
         canvas.setPointerCapture(event.pointerId);
         event.preventDefault();
       },
@@ -1126,9 +1214,19 @@
     canvas.addEventListener(
       'pointermove',
       (event) => {
+        const { x, y } = getCanvasPoint(event.clientX, event.clientY);
+        if (!pointerPositions.has(event.pointerId)) return;
+        pointerPositions.set(event.pointerId, { x, y });
+
+        if (pinchState.active && pointerPositions.size >= 2) {
+          const [pointA, pointB] = [...pointerPositions.values()];
+          updatePinch(pointA, pointB);
+          event.preventDefault();
+          return;
+        }
+
         if (pointerState.activeId !== event.pointerId) return;
 
-        const { x, y } = getCanvasPoint(event.clientX, event.clientY);
         const dragDistance = Math.hypot(x - pointerState.startX, y - pointerState.startY);
 
         if (!pointerState.isDragging && dragDistance > DRAG_DISTANCE_THRESHOLD) {
