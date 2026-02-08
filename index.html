@@ -9,7 +9,19 @@
 <body>
   <div id="app">
     <header id="topBar">
+      <div class="topbar-spacer" aria-hidden="true"></div>
       <div class="title">Waypoint Name</div>
+      <div class="status-counters" aria-label="Learning status counts">
+        <span class="status-pill status-pill--red" aria-label="Not learned yet">
+          <span class="status-value" id="countRed">0</span>
+        </span>
+        <span class="status-pill status-pill--yellow" aria-label="Being learned">
+          <span class="status-value" id="countYellow">0</span>
+        </span>
+        <span class="status-pill status-pill--green" aria-label="Known well">
+          <span class="status-value" id="countGreen">0</span>
+        </span>
+      </div>
     </header>
     <main id="stage">
       <canvas id="mapCanvas"></canvas>

@@ -7,6 +7,9 @@
   const firOverlay = document.getElementById('firOverlay');
   const firFab = document.getElementById('firFab');
   const firContent = firPanel?.querySelector('.drawer-content');
+  const countRedEl = document.getElementById('countRed');
+  const countYellowEl = document.getElementById('countYellow');
+  const countGreenEl = document.getElementById('countGreen');
 
   const viewport = { scale: 1, offsetX: 0, offsetY: 0 };
 
@@ -364,6 +367,7 @@
     waypoint.stats.dueAt = now + wrongInterval(waypoint.stats.wrongStreak);
     waypoint.stats.lastShownAt = now;
     persistWaypointStats(waypoint);
+    updateStatusCounters();
   }
 
   function applyCorrect(waypoint, wrongsBeforeCorrect) {
@@ -384,11 +388,13 @@
     waypoint.stats.dueAt = now + interval;
     waypoint.stats.lastShownAt = now;
     persistWaypointStats(waypoint);
+    updateStatusCounters();
   }
 
   function onFIRSelectionChanged() {
     persistEnabledFIRs();
     updateVisibleWaypoints();
+    updateStatusCounters();
     updateCurrentTarget();
     requestRender();
   }
@@ -532,6 +538,41 @@
     }
 
     topBarTitle.textContent = 'Waypoint Name';
+  }
+
+  function categorizeWaypoint(stats) {
+    const merged = { ...defaultStats(), ...stats };
+
+    if (merged.correctStreak >= 3 && merged.wrongStreak === 0) {
+      return 'green';
+    }
+
+    if (merged.hasAnswered && merged.correctStreak > 0 && merged.wrongStreak === 0) {
+      return 'yellow';
+    }
+
+    return 'red';
+  }
+
+  function updateStatusCounters() {
+    if (!countRedEl || !countYellowEl || !countGreenEl) return;
+    if (initializationError || !visibleWaypoints.length) {
+      countRedEl.textContent = '0';
+      countYellowEl.textContent = '0';
+      countGreenEl.textContent = '0';
+      return;
+    }
+
+    const counts = { red: 0, yellow: 0, green: 0 };
+
+    visibleWaypoints.forEach((wp) => {
+      const category = categorizeWaypoint(wp.stats);
+      counts[category] += 1;
+    });
+
+    countRedEl.textContent = `${counts.red}`;
+    countYellowEl.textContent = `${counts.yellow}`;
+    countGreenEl.textContent = `${counts.green}`;
   }
 
   function setInitializationError(message) {
@@ -875,6 +916,7 @@
 
       updateProjection();
       updateVisibleWaypoints();
+      updateStatusCounters();
       updateCurrentTarget();
       fitViewToEPWW();
       requestRender();
