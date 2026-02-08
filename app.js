@@ -34,6 +34,7 @@
 
   const STORAGE_KEY = 'enabledFIRs:v1';
   const QUIZ_STORAGE_PREFIX = 'waypointStats:v1:';
+  const SESSION_STORAGE_KEY = 'waypointSession:v1';
 
   const QUIZ_CONFIG = {
     tolerancePx: 18,
@@ -44,6 +45,31 @@
     maxCorrectIntervalMs: 2 * 60 * 60 * 1000,
     revealFlashMs: 300,
   };
+
+  const SESSION_HEARTBEAT_MS = 60 * 1000;
+
+  const FORGETTING_CONFIG = {
+    dayMs: 24 * 60 * 60 * 1000,
+    halfLifeDays: {
+      yellow: 7,
+      green: 14,
+      red: 999,
+    },
+    decayAmountByStatus: {
+      yellow: 0.5,
+      green: 0.6,
+    },
+    baseMastery: {
+      red: 0.2,
+      yellow: 0.6,
+      green: 0.9,
+    },
+    maxDowngradesBase: 10,
+    maxDowngradesPercent: 0.05,
+    downgradeCooldownMs: 30 * 1000,
+  };
+
+  const DEBUG_FORGETTING = false;
 
   const DEFAULT_VIEW_BOUNDS = {
     minLon: 14.156666,
@@ -189,8 +215,14 @@
       correctStreak: 0,
       dueAt: 0,
       lastShownAt: 0,
+      lastSeenAt: 0,
+      lastCorrectAt: null,
+      lastSessionAt: 0,
       seen: false,
       hasAnswered: false,
+      status: 'red',
+      lastStatusChangeAt: 0,
+      lastAnswerWasInstant: false,
     };
   }
 
@@ -216,25 +248,192 @@
     }
   }
 
+  function updateStatusFromStreaks(stats, now) {
+    const nextStatus = computeStatusFromStreaks(stats);
+    if (nextStatus !== stats.status) {
+      stats.status = nextStatus;
+      stats.lastStatusChangeAt = now;
+    }
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+  }
+
+  function computeForgetFactor(stats, now) {
+    const referenceTs = Number.isFinite(stats.lastSeenAt) ? stats.lastSeenAt : now;
+    const elapsedDays = Math.max(0, (now - referenceTs) / FORGETTING_CONFIG.dayMs);
+    const halfLifeDays =
+      FORGETTING_CONFIG.halfLifeDays[stats.status] ?? FORGETTING_CONFIG.halfLifeDays.red;
+    const factor = 1 - Math.exp((-elapsedDays * Math.LN2) / halfLifeDays);
+    return clamp(factor, 0, 1);
+  }
+
+  function masteryFromStats(stats) {
+    const base =
+      FORGETTING_CONFIG.baseMastery[stats.status] ?? FORGETTING_CONFIG.baseMastery.red;
+    return base + 0.03 * stats.correctStreak - 0.05 * stats.wrongStreak;
+  }
+
+  function statusFromMastery(value) {
+    if (value < 0.45) return 'red';
+    if (value < 0.8) return 'yellow';
+    return 'green';
+  }
+
+  function applyTimeDecayAndDowngrades(points, now) {
+    if (!points?.length) return;
+    const maxDowngrades = Math.max(
+      FORGETTING_CONFIG.maxDowngradesBase,
+      Math.ceil(points.length * FORGETTING_CONFIG.maxDowngradesPercent)
+    );
+
+    const downgradeCandidates = [];
+
+    points.forEach((wp) => {
+      if (!wp.stats) {
+        wp.stats = normalizeStats(null, now);
+      } else {
+        wp.stats = normalizeStats(wp.stats, now);
+      }
+
+      wp.stats.lastSessionAt = now;
+
+      const forgetFactor = computeForgetFactor(wp.stats, now);
+      wp.stats.debugForgetFactor = forgetFactor;
+
+      if (wp.stats.status === 'red') {
+        persistWaypointStats(wp);
+        return;
+      }
+
+      const mastery = masteryFromStats(wp.stats);
+      const decayAmount =
+        FORGETTING_CONFIG.decayAmountByStatus[wp.stats.status] ?? 0;
+      const masteryDecayed = mastery - forgetFactor * decayAmount;
+      const decayedStatus = statusFromMastery(masteryDecayed);
+
+      const rank = { red: 0, yellow: 1, green: 2 };
+      if (rank[decayedStatus] < rank[wp.stats.status]) {
+        downgradeCandidates.push({
+          wp,
+          forgetFactor,
+          decayedStatus,
+        });
+      }
+
+      persistWaypointStats(wp);
+    });
+
+    downgradeCandidates.sort((a, b) => b.forgetFactor - a.forgetFactor);
+    const applied = downgradeCandidates.slice(0, maxDowngrades);
+
+    applied.forEach(({ wp, decayedStatus }) => {
+      const prevStatus = wp.stats.status;
+      wp.stats.status = decayedStatus;
+      wp.stats.lastStatusChangeAt = now;
+
+      if (prevStatus === 'green' && decayedStatus === 'yellow') {
+        wp.stats.correctStreak = Math.min(wp.stats.correctStreak, 1);
+        wp.stats.wrongStreak = 0;
+      } else if (prevStatus === 'yellow' && decayedStatus === 'red') {
+        wp.stats.correctStreak = 0;
+        wp.stats.wrongStreak = 0;
+      }
+
+      const dueAt = Number.isFinite(wp.stats.dueAt) ? wp.stats.dueAt : Infinity;
+      wp.stats.dueAt = Math.min(dueAt, now + FORGETTING_CONFIG.downgradeCooldownMs);
+      persistWaypointStats(wp);
+    });
+
+    if (DEBUG_FORGETTING) {
+      const examples = applied.slice(0, 3).map(({ wp, decayedStatus }) => ({
+        id: wp.id,
+        status: decayedStatus,
+        forgetFactor: wp.stats.debugForgetFactor,
+      }));
+      console.log(
+        '[forgetting] downgrades applied',
+        applied.length,
+        'of',
+        downgradeCandidates.length,
+        examples
+      );
+    }
+  }
+
+  function computeStatusFromStreaks(stats) {
+    const merged = { ...defaultStats(), ...stats };
+
+    if (merged.correctStreak >= 3 && merged.wrongStreak === 0) {
+      return 'green';
+    }
+
+    if (merged.hasAnswered && merged.correctStreak > 0 && merged.wrongStreak === 0) {
+      return 'yellow';
+    }
+
+    return 'red';
+  }
+
+  function normalizeStats(stats, now) {
+    const stored = stats || {};
+    const merged = { ...defaultStats(), ...stored };
+
+    merged.correctStreak = Number.isFinite(merged.correctStreak) ? merged.correctStreak : 0;
+    merged.wrongStreak = Number.isFinite(merged.wrongStreak) ? merged.wrongStreak : 0;
+
+    merged.hasAnswered =
+      typeof merged.hasAnswered === 'boolean'
+        ? merged.hasAnswered
+        : Boolean(
+            stored?.dueAt ||
+              stored?.lastShownAt ||
+              stored?.correctStreak ||
+              stored?.wrongStreak
+          );
+
+    merged.seen =
+      typeof merged.seen === 'boolean' ? merged.seen : Boolean(merged.hasAnswered);
+
+    if (!Number.isFinite(merged.lastShownAt)) {
+      merged.lastShownAt = merged.hasAnswered ? now : 0;
+    }
+
+    if (!Number.isFinite(merged.lastSeenAt)) {
+      merged.lastSeenAt = merged.lastShownAt || now;
+    }
+
+    merged.lastCorrectAt =
+      merged.lastCorrectAt === null || Number.isFinite(merged.lastCorrectAt)
+        ? merged.lastCorrectAt
+        : null;
+
+    if (!Number.isFinite(merged.lastSessionAt)) {
+      merged.lastSessionAt = now;
+    }
+
+    const computedStatus = computeStatusFromStreaks(merged);
+    merged.status =
+      merged.status === 'red' || merged.status === 'yellow' || merged.status === 'green'
+        ? merged.status
+        : computedStatus;
+
+    if (!Number.isFinite(merged.lastStatusChangeAt)) {
+      merged.lastStatusChangeAt = now;
+    }
+
+    merged.lastAnswerWasInstant = Boolean(merged.lastAnswerWasInstant);
+
+    return merged;
+  }
+
   function mergeStoredStats(waypointList) {
+    const now = Date.now();
     waypointList.forEach((wp) => {
-      const stored = loadWaypointStats(wp.id) || {};
-      const merged = { ...defaultStats(), ...stored };
-
-      merged.hasAnswered =
-        typeof merged.hasAnswered === 'boolean'
-          ? merged.hasAnswered
-          : Boolean(
-              stored?.dueAt ||
-                stored?.lastShownAt ||
-                stored?.correctStreak ||
-                stored?.wrongStreak
-            );
-
-      merged.seen =
-        typeof merged.seen === 'boolean' ? merged.seen : Boolean(merged.hasAnswered);
-
-      wp.stats = merged;
+      const stored = loadWaypointStats(wp.id);
+      wp.stats = normalizeStats(stored, now);
+      persistWaypointStats(wp);
     });
   }
 
@@ -363,8 +562,12 @@
     waypoint.stats.wrongStreak += 1;
     waypoint.stats.correctStreak = 0;
     waypoint.stats.hasAnswered = true;
+    waypoint.stats.lastSeenAt = now;
+    waypoint.stats.lastSessionAt = now;
+    waypoint.stats.lastAnswerWasInstant = false;
     waypoint.stats.dueAt = now + wrongInterval(waypoint.stats.wrongStreak);
     waypoint.stats.lastShownAt = now;
+    updateStatusFromStreaks(waypoint.stats, now);
     persistWaypointStats(waypoint);
     updateStatusCounters();
   }
@@ -375,6 +578,10 @@
     waypoint.stats.wrongStreak = 0;
     waypoint.stats.correctStreak += 1;
     waypoint.stats.hasAnswered = true;
+    waypoint.stats.lastSeenAt = now;
+    waypoint.stats.lastSessionAt = now;
+    waypoint.stats.lastCorrectAt = now;
+    waypoint.stats.lastAnswerWasInstant = wrongsBeforeCorrect === 0;
 
     const base = baseCorrectInterval(wrongsBeforeCorrect);
     const streakMultiplier =
@@ -386,6 +593,7 @@
 
     waypoint.stats.dueAt = now + interval;
     waypoint.stats.lastShownAt = now;
+    updateStatusFromStreaks(waypoint.stats, now);
     persistWaypointStats(waypoint);
     updateStatusCounters();
   }
@@ -482,9 +690,11 @@
   function markWaypointSeen(waypoint) {
     if (!waypoint) return;
     if (!waypoint.stats) waypoint.stats = defaultStats();
-    if (waypoint.stats.seen) return;
+    const now = Date.now();
 
     waypoint.stats.seen = true;
+    waypoint.stats.lastSeenAt = now;
+    waypoint.stats.lastSessionAt = now;
     persistWaypointStats(waypoint);
   }
 
@@ -542,15 +752,11 @@
   function categorizeWaypoint(stats) {
     const merged = { ...defaultStats(), ...stats };
 
-    if (merged.correctStreak >= 3 && merged.wrongStreak === 0) {
-      return 'green';
+    if (merged.status === 'red' || merged.status === 'yellow' || merged.status === 'green') {
+      return merged.status;
     }
 
-    if (merged.hasAnswered && merged.correctStreak > 0 && merged.wrongStreak === 0) {
-      return 'yellow';
-    }
-
-    return 'red';
+    return computeStatusFromStreaks(merged);
   }
 
   function updateStatusCounters() {
@@ -908,6 +1114,8 @@
       firGeoJSON = firData;
       waypoints = loadedWaypoints;
       mergeStoredStats(waypoints);
+      applyTimeDecayAndDowngrades(waypoints, Date.now());
+      touchSessionTimestamp();
 
       firOptions = uniqueFIRs(waypoints);
       enabledFIRs = restoreEnabledFIRs(firOptions);
@@ -1032,6 +1240,14 @@
       .forEach((wp) => addPoint(wp.x, wp.y));
 
     return Number.isFinite(bounds.minX) ? bounds : null;
+  }
+
+  function touchSessionTimestamp(now = Date.now()) {
+    try {
+      localStorage.setItem(SESSION_STORAGE_KEY, `${now}`);
+    } catch (error) {
+      console.warn('Failed to persist session timestamp', error);
+    }
   }
 
   function fitViewToEPWW() {
@@ -1314,4 +1530,11 @@
 
   window.addEventListener('resize', resizeCanvas, { passive: true });
   window.addEventListener('load', init);
+  window.addEventListener('beforeunload', () => touchSessionTimestamp());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      touchSessionTimestamp();
+    }
+  });
+  setInterval(() => touchSessionTimestamp(), SESSION_HEARTBEAT_MS);
 })();
