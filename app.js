@@ -44,6 +44,11 @@
     correctStreakMultiplier: 1.7,
     maxCorrectIntervalMs: 2 * 60 * 60 * 1000,
     revealFlashMs: 300,
+    statusPriorityWeights: {
+      red: 7,
+      yellow: 4,
+      green: 1,
+    },
   };
 
   const SESSION_HEARTBEAT_MS = 60 * 1000;
@@ -612,6 +617,33 @@
     return list[index];
   }
 
+  function statusWeight(waypoint) {
+    const status = waypoint?.stats?.status;
+    return QUIZ_CONFIG.statusPriorityWeights[status] ?? 1;
+  }
+
+  function weightedRandomItem(list, weightFn) {
+    if (!list?.length) return null;
+
+    const weighted = list.map((item) => ({
+      item,
+      weight: Math.max(0, Number(weightFn(item)) || 0),
+    }));
+
+    const totalWeight = weighted.reduce((sum, entry) => sum + entry.weight, 0);
+    if (totalWeight <= 0) return randomItem(list);
+
+    let threshold = Math.random() * totalWeight;
+    for (const entry of weighted) {
+      threshold -= entry.weight;
+      if (threshold <= 0) {
+        return entry.item;
+      }
+    }
+
+    return weighted[weighted.length - 1].item;
+  }
+
   function chooseNextTarget(availableWaypoints, { excludeId } = {}) {
     const pool = excludeId
       ? availableWaypoints.filter((wp) => wp.id !== excludeId)
@@ -644,17 +676,17 @@
     });
 
     if (groupA.length) {
-      return randomItem(groupA);
+      return weightedRandomItem(groupA, statusWeight);
     }
 
     if (groupB.length) {
-      return randomItem(groupB);
+      return weightedRandomItem(groupB, statusWeight);
     }
 
     if (groupC.length) {
       const jittered = groupC.map(({ wp, dueAt }) => ({
         wp,
-        value: (dueAt ?? now) + Math.random() * 2000,
+        value: (dueAt ?? now) + Math.random() * 2000 - statusWeight(wp) * 400,
       }));
 
       jittered.sort((a, b) => a.value - b.value);
